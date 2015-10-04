@@ -1,0 +1,8 @@
+#!/bin/bash
+ 
+set -e
+set -x
+
+spark-submit --class 
+
+exit 0
