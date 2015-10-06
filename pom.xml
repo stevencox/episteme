@@ -5,12 +5,12 @@
   
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>org.evry</groupId>
+  <groupId>org.episteme</groupId>
   <artifactId>core</artifactId>
   <packaging>jar</packaging>
   <version>0.0.1</version>
-  <name>Evryscope Analytics</name>
-  <url>https://evryscopedev.wordpress.com/</url>
+  <name>Episteme Analytics</name>
+  <url>https://rencidatateam.wordpress.com/stars/</url>
   
   <properties>
     <spark.version>1.5.0</spark.version>
@@ -32,6 +32,7 @@
     <robustit.version>1.7.4</robustit.version>
     <jsoup.version>1.7.3</jsoup.version>
     <json4s.version>3.2.10</json4s.version>    
+    <scopt.version>3.3.0</scopt.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <PermGen>64m</PermGen>
@@ -44,6 +45,11 @@
       <groupId>cc.factorie</groupId>
       <artifactId>factorie_${scala.binary.version}</artifactId>
       <version>1.1.1</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.scopt</groupId>
+      <artifactId>scopt_${scala.binary.version}</artifactId>
+      <version>${scopt.version}</version>
     </dependency>
 
     <!-- MongoDB -->
@@ -176,7 +182,10 @@
 	  <artifactId>exec-maven-plugin</artifactId>
 	  <version>1.4.0</version>
           <configuration>
-            <mainClass>org.evry.Evry</mainClass>
+            <mainClass>org.episteme.Wikipedia</mainClass>
+	    <arguments>
+              <argument>/projects/stars/var/wikipedia/enwiki-small.xml</argument>
+	    </arguments>
           </configuration>
 	</plugin>
 
