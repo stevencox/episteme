@@ -13,9 +13,11 @@ import traceback
 import xml.parsers.expat
 from mesh import MeSH
 from nltk import word_tokenize
-#import xml.etree.cElementTree as et
-from lxml import etree as et
-
+try:
+    from lxml import etree as et
+except ImportError:
+    import xml.etree.cElementTree as et
+        
 def init_logging ():
     FORMAT = '%(asctime)-15s %(filename)s %(funcName)s %(levelname)s: %(message)s'
     logging.basicConfig(format=FORMAT, level=logging.INFO)
@@ -31,6 +33,7 @@ def get_spark_context ():
     conf = (SparkConf()
             .setMaster("mesos://{0}:5050".format (ip))
             .setAppName("ChemoText Analytic")
+#            .set("spark.mesos.coarse", "true")
             .set("spark.executor.memory", "5g"))
     return SparkContext(conf = conf)
 
@@ -74,7 +77,11 @@ def get_article_dirs (articles):
         cache.put ('pubmed_dirs.json', dirs)
     return dirs
 
-def process_article (article, mesh_xml):
+def process_article (item): #article, mesh_xml):
+    
+    article = item [0]
+    mesh_xml = item [1]
+    results = []
 
     sentence_detector = nltk.data.load('tokenizers/punkt/english.pickle')
 
@@ -93,15 +100,19 @@ def process_article (article, mesh_xml):
                                 print "--> word:{0} tags:{1} article:{2}".format (term, tags, article)
                                 break
         return result
+        
+    # return [ ( socket.gethostname (), [ 0, 1, 2 ], [ 3, 4, 5 ]  ) ]
 
-    results = []
     try:
         mesh = MeSH (mesh_xml)
         print "@-article: {0}".format (article)
         with open (article) as stream:
+            '''
             data = delete_xml_char_refs (stream.read ())
             filtered = cStringIO.StringIO (data)
             tree = et.parse (filtered)
+            '''
+            tree = et.parse (article)
             paragraphs = tree.findall ('.//p')
             if paragraphs is not None:
                 for para in paragraphs:
@@ -113,7 +124,6 @@ def process_article (article, mesh_xml):
                         chemical = vocab_nlp (mesh.chemicals, text, article)
                         disease  = vocab_nlp (mesh.diseases, text, article)
                         protein  = vocab_nlp (mesh.proteins, text, article)
-                        
                         if protein and chemical and disease:
                             results.append ( ( article,
                                                [ chemical [0], protein [0], disease [0] ],
@@ -123,6 +133,7 @@ def process_article (article, mesh_xml):
                         traceback.print_exc ()
     except:
         traceback.print_exc ()
+
     return results
 
 def find_relationships (articles, mesh_xml):
@@ -142,11 +153,12 @@ def find_relationships (articles, mesh_xml):
         article_list = articles.collect ()
         cache.put ('articles', article_list)
 
-    hits = sc.parallelize (article_list).cache (). \
-           map (lambda a : ( a, mesh_xml )). \
-           repartition (len (article_list)). \
-           flatMap (lambda a : process_article (a[0], a[1])). \
-           take (100)
+    logger.info ("Processing {0} articles".format (len (article_list)))
+    hits = sc.parallelize (article_list, 190).cache (). \
+           map (lambda a : ( a, mesh_xml ))
+
+    logger.info ("intermediate: {0} articles to process".format (hits.count ()))
+    hits = hits.flatMap (process_article).cache ().collect ()
 
     for hit in hits:
         article = hit [0]
