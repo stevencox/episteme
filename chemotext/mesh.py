@@ -60,8 +60,12 @@ class MeSH (object):
                         elif n.startswith (self.chemical_mesh_prefix):
                             self.chemicals.append (element.text)
                             break
+            self.save ()
+    def save (self, path=None):
         ''' Cache as JSON '''
-        with open (self.mesh_store_json, "w") as output:
+        if path is None:
+            path = self.mesh_store_json
+        with open (path, "w") as output:
             output.write (json.dumps ({
                 "proteins" : self.proteins,
                 "chemicals" : self.chemicals,

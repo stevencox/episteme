@@ -17,6 +17,8 @@ try:
     from lxml import etree as et
 except ImportError:
     import xml.etree.cElementTree as et
+from pyspark.mllib.feature import Word2Vec
+from pyspark.mllib.feature import Word2VecModel
         
 def init_logging ():
     FORMAT = '%(asctime)-15s %(filename)s %(funcName)s %(levelname)s: %(message)s'
@@ -77,6 +79,84 @@ def get_article_dirs (articles):
         cache.put ('pubmed_dirs.json', dirs)
     return dirs
 
+def get_corpus_sentences (article):
+    results = []
+    try:
+        sentence_detector = nltk.data.load('tokenizers/punkt/english.pickle')
+        print "@-article: {0}".format (article)
+        with open (article) as stream:
+            tree = et.parse (article)
+            paragraphs = tree.findall ('.//p')
+            if paragraphs is not None:
+                for para in paragraphs:
+                    try:
+                        text = "".join( [ "" if para.text is None else para.text ] +
+                                        [ et.tostring (e, encoding='UTF-8', method='text') for e in para.getchildren() ] )
+                        text = delete_non_unicode_chars (text)
+                        text = text.decode ("utf8", "ignore")
+                        results.append ( sentence_detector.tokenize (text.strip ()) )
+                    except:
+                        traceback.print_exc ()
+    except:
+        traceback.print_exc ()
+    return results
+
+corpus_file_name = "pubmed.corpus"
+
+def generate_corpus (articles, app_home):
+    path = os.path.join (app_home, corpus_file_name)
+    if not os.path.exists (path):
+        sentences = articles.flatMap (generate_corpus_sentences).cache ()
+        corpus = sentences.collect ()
+        with open (path, 'w') as stream:
+            for sentence in corpus:
+                stream.write ("{0}\n".format (sentence))
+
+word2vec_model_path = "pubmed.word2vec"
+
+def get_word2vec_model (sc, app_home):
+    path = os.path.join (app_home, word2vec_model_path)
+    model = None
+    if os.path.exists (path):
+        model = Word2VecModel.load(sc, word2vec_model_path)
+    elif os.path.exists (corpus_file_name):
+        inp = sc.textFile (corpus_file_name).map(lambda row: row.split(" "))
+        word2vec = Word2Vec()
+        #word2vec.setNumPartitions (200)
+        model = word2vec.fit(inp)
+        model.save (sc, path)
+    else:
+        logger.error ("No pubmed corpus file found at {0}.".format (corpus_file_name))
+    return model
+
+extended_mesh = "mesh.ext"
+def find_synonyms (model, word, radius):
+    try:
+        model.findSynonyms (word, radius)
+    except:
+        logger.error ("unable to find word {0}".format (word))
+
+def get_synonyms (model, mesh_xml, app_home, radius=5):
+    if os.path.exists (extended_mesh):
+        mesh = MeSH (extended_mesh)
+    else:
+        src_path = os.path.join (app_home, mesh_xml)
+        mesh = MeSH (src_path)
+        for word in mesh.proteins:
+            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (protein, radius)
+            if synonyms is not None:
+                mesh.proteins = mesh.proteins + synonyms
+        for word in mesh.chemicals:
+            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (chemical, radius)
+            if synonyms is not None:
+                mesh.chemicals = mesh.chemicals + synonyms
+        for word in mesh.diseases:
+            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (disease, radius)
+            if synonyms is not None:
+                mesh.diseases = mesh.diseases + synonyms
+        mesh.save (extended_mesh)
+    return mesh
+
 def process_article (item): #article, mesh_xml):
     
     article = item [0]
@@ -136,7 +216,7 @@ def process_article (item): #article, mesh_xml):
 
     return results
 
-def find_relationships (articles, mesh_xml):
+def find_relationships (app_home, articles, mesh_xml):
     sc = get_spark_context ()
 
     logger.info ("Getting Pubmed dirs")
@@ -154,11 +234,16 @@ def find_relationships (articles, mesh_xml):
         cache.put ('articles', article_list)
 
     logger.info ("Processing {0} articles".format (len (article_list)))
-    hits = sc.parallelize (article_list, 190).cache (). \
-           map (lambda a : ( a, mesh_xml ))
+    articles = sc.parallelize (article_list, 190).cache ()
 
-    logger.info ("intermediate: {0} articles to process".format (hits.count ()))
-    hits = hits.flatMap (process_article).cache ().collect ()
+    generate_corpus (articles, app_home)
+    model = get_word2vec_model (sc, app_home)
+    get_synonyms (model, mesh_xml, app_home)
+
+    articles = articles.map (lambda a : ( a, mesh_xml ))
+
+    logger.info ("intermediate: {0} articles to process".format (articles.count ()))
+    articles = articles.flatMap (process_article).cache ().collect ()
 
     for hit in hits:
         article = hit [0]
@@ -185,9 +270,11 @@ def delete_xml_char_refs (text):
     return text
 
 def main ():
-    articles = sys.argv [1]
-    mesh_xml = sys.argv [2]
-    find_relationships (articles, mesh_xml)
+    app_home = sys.argv [1]
+    articles = sys.argv [2]
+    mesh_xml = sys.argv [3]
+    find_relationships (app_home, articles, mesh_xml)
     #print process_article (articles, mesh_xml)
 
 main ()
+

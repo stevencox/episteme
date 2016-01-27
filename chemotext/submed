@@ -1,19 +1,18 @@
 #!/bin/bash
 
 source /projects/stars/app/evry/conf/env.sh
-APP_HOME=/projects/stars/app/episteme/chemotext
+CHEMOTEXT_HOME=/projects/stars/app/episteme/chemotext
 
 articles=$STARS_HOME/var/pubmed/articles/
 mesh=$STARS_HOME/var/pubmed/mesh/desc2016.xml 
 
-#
-
+echo $CHEMOTEXT_HOME
 $SPARK_HOME/bin/spark-submit   \
     --conf spark.default.parallelism=150 \
     --num-executors        50    \
     --total-executor-cores 100   \
     --executor-memory      20G   \
-    --py-files $APP_HOME/mesh.py \
-    $APP_HOME/chemotext.py $articles $mesh
+    --py-files $CHEMOTEXT_HOME/mesh.py \
+    $CHEMOTEXT_HOME/chemotext.py $CHEMOTEXT_HOME $articles $mesh
 
 exit 0
