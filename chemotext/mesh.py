@@ -23,11 +23,9 @@ class MeSH (object):
         #print "----------> {0}".format (self.mesh_store_json)
         
         if os.path.exists (self.mesh_store_json):
-            with open (self.mesh_store_json) as stream:
-                db = json.loads (stream.read ())
-                self.proteins = db['proteins']
-                self.chemicals = db['chemicals']
-                self.diseases = db['diseases']
+            self.load_json (self.mesh_store_json)
+        elif file_name.endswith (".json"):
+            self.load_json (file_name)
         else:
             self.parse (file_name)
 
@@ -61,6 +59,7 @@ class MeSH (object):
                             self.chemicals.append (element.text)
                             break
             self.save ()
+
     def save (self, path=None):
         ''' Cache as JSON '''
         if path is None:
@@ -71,6 +70,13 @@ class MeSH (object):
                 "chemicals" : self.chemicals,
                 "diseases" : self.diseases
             }, sort_keys=True, indent=2))
+
+    def load_json (self, path):
+        with open (path) as stream:
+            db = json.loads (stream.read ())
+            self.proteins = db['proteins']
+            self.chemicals = db['chemicals']
+            self.diseases = db['diseases']
 
 def main ():
     file_name = sys.argv [1]

@@ -40,8 +40,8 @@ def get_spark_context ():
     return SparkContext(conf = conf)
 
 class Cache(object):
-    def __init__(self):
-        self.path = "cache"
+    def __init__(self, root="."):
+        self.path = os.path.join (root, "cache")
         if not os.path.isdir (self.path):
             os.makedirs (self.path)
     def get (self, name):
@@ -64,8 +64,8 @@ def get_dirs (root, ):
             dirs.append (s)
     return dirs
 
-def get_article_dirs (articles):
-    cache = Cache ()
+def get_article_dirs (articles, app_home):
+    cache = Cache (app_home)
     dirs = cache.get ('pubmed_dirs.json')
     c = 0
     if dirs is None:
@@ -74,7 +74,7 @@ def get_article_dirs (articles):
             for d in dirnames:
                 dirs.append (os.path.join (root, d))
                 c = c + 1
-                if c > 100:
+                if c > 10:
                     break
         cache.put ('pubmed_dirs.json', dirs)
     return dirs
@@ -104,9 +104,11 @@ def get_corpus_sentences (article):
 corpus_file_name = "pubmed.corpus"
 
 def generate_corpus (articles, app_home):
-    path = os.path.join (app_home, corpus_file_name)
+    logger.info ("Generating PubMed sentence corpus")
+    path = os.path.join (app_home, "cache", corpus_file_name)
     if not os.path.exists (path):
-        sentences = articles.flatMap (generate_corpus_sentences).cache ()
+        logger.info ("Generating PubMed sentence corpus (did not already exist)...")
+        sentences = articles.flatMap (get_corpus_sentences).cache ()
         corpus = sentences.collect ()
         with open (path, 'w') as stream:
             for sentence in corpus:
@@ -115,49 +117,70 @@ def generate_corpus (articles, app_home):
 word2vec_model_path = "pubmed.word2vec"
 
 def get_word2vec_model (sc, app_home):
-    path = os.path.join (app_home, word2vec_model_path)
+    logger.info ("Getting word2vec model of corpus")
+    w2v_path = os.path.join (app_home, "cache", word2vec_model_path)
+    corpus_path = os.path.join (app_home, "cache", corpus_file_name)
     model = None
-    if os.path.exists (path):
-        model = Word2VecModel.load(sc, word2vec_model_path)
-    elif os.path.exists (corpus_file_name):
-        inp = sc.textFile (corpus_file_name).map(lambda row: row.split(" "))
+    logger.info ("w2v model path: {0}".format (w2v_path))
+    logger.info ("corpus path: {0}".format (corpus_path))
+
+    if os.path.exists (w2v_path):
+        logger.info ("Loading existing word2vec model")
+        model = Word2VecModel.load(sc, w2v_path)
+    elif os.path.exists (corpus_path):
+        logger.info ("Computing new word2vec model from corpus")
+        inp = sc.textFile (corpus_path).map(lambda row: row.split(" "))
         word2vec = Word2Vec()
         #word2vec.setNumPartitions (200)
-        model = word2vec.fit(inp)
-        model.save (sc, path)
+        model = word2vec.fit (inp)
+        model.save (sc, w2v_path)
     else:
-        logger.error ("No pubmed corpus file found at {0}.".format (corpus_file_name))
+        logger.error ("No existing word2vecd model found and no pubmed corpus file found at {0}.".format (corpus_path))
     return model
 
-extended_mesh = "mesh.ext"
+extended_mesh = "extended_mesh.json"
 def find_synonyms (model, word, radius):
+    results = []
+    # https://issues.apache.org/jira/browse/SPARK-12016
     try:
-        model.findSynonyms (word, radius)
+        if not " " in word:
+            results = model.findSynonyms (word, radius)
     except:
-        logger.error ("unable to find word {0}".format (word))
+        #traceback.print_exc ()
+        #logger.info ("unable to find word {0}".format (word))
+        pass
+    return results
 
-def get_synonyms (model, mesh_xml, app_home, radius=5):
-    if os.path.exists (extended_mesh):
-        mesh = MeSH (extended_mesh)
+def augment_vocab (terms, model, kind, radius=3, threshold=0.15):
+    added = []
+    for word in terms:
+        synonyms = find_synonyms (model, word, radius)
+        with open ('syn.log', 'w') as s:
+            s.write ("{0} -> {1}".format (word, synonyms))
+        for synonym, cosine_similarity in synonyms:
+            if cosine_similarity < threshold:
+                if not synonym in added and synonym.islower() and synonym.isalpha ():
+                    print " {0} {1} syn-> {2} cs: {3}".format (kind, word, synonym, cosine_similarity)
+                    added.append (synonym)
+    terms.extend (added)
+
+def get_synonyms (model, mesh_xml, app_home, radius=3):
+    logger.info ("Computing MeSH synonyms using word2vec")
+    e_mesh = os.path.join (app_home, "cache", extended_mesh)
+
+    if os.path.exists (e_mesh):
+        logger.info ("Loading existing extended MeSH file: {0}".format (e_mesh))
+        mesh = MeSH (e_mesh)
     else:
-        src_path = os.path.join (app_home, mesh_xml)
-        mesh = MeSH (src_path)
-        for word in mesh.proteins:
-            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (protein, radius)
-            if synonyms is not None:
-                mesh.proteins = mesh.proteins + synonyms
-        for word in mesh.chemicals:
-            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (chemical, radius)
-            if synonyms is not None:
-                mesh.chemicals = mesh.chemicals + synonyms
-        for word in mesh.diseases:
-            synonyms = find_synonyms (model, word, radius) #model.findSynonyms (disease, radius)
-            if synonyms is not None:
-                mesh.diseases = mesh.diseases + synonyms
-        mesh.save (extended_mesh)
+        logger.info ("Executing synonym search (no cached version exists")
+        mesh = MeSH (mesh_xml)
+        augment_vocab (mesh.proteins, model, 'proteins')
+        augment_vocab (mesh.chemicals, model, 'chemicals')
+        augment_vocab (mesh.diseases, model, 'diseases')
+        mesh.save (e_mesh)
     return mesh
 
-def process_article (item): #article, mesh_xml):
+def process_article (item):
     
     article = item [0]
     mesh_xml = item [1]
@@ -181,8 +204,6 @@ def process_article (item): #article, mesh_xml):
                                 break
         return result
         
-    # return [ ( socket.gethostname (), [ 0, 1, 2 ], [ 3, 4, 5 ]  ) ]
-
     try:
         mesh = MeSH (mesh_xml)
         print "@-article: {0}".format (article)
@@ -220,27 +241,28 @@ def find_relationships (app_home, articles, mesh_xml):
     sc = get_spark_context ()
 
     logger.info ("Getting Pubmed dirs")
-    dirs = get_article_dirs (articles)
+    dirs = get_article_dirs (articles, app_home)
     logger.debug ("dirs: {0}".format (dirs))
 
-    cache = Cache ()
+    cache = Cache (app_home)
     article_list = cache.get ('articles')
     if article_list is None:
-        articles = sc.parallelize (dirs, 150)
+        articles = sc.parallelize (dirs, 200)
         logger.debug ("dirs -> {0}".format (articles.count ()))
         articles = articles.flatMap (lambda d : glob.glob (os.path.join (d, "*.nxml") )).cache ()
         logger.info ("articles -> {0}".format (articles.count ()))
         article_list = articles.collect ()
         cache.put ('articles', article_list)
 
-    logger.info ("Processing {0} articles".format (len (article_list)))
-    articles = sc.parallelize (article_list, 190).cache ()
+    articles = sc.parallelize (article_list, 190).sample(False, 0.01).cache ()
+    logger.info ("Processing {0} articles".format (articles.count ()))
 
     generate_corpus (articles, app_home)
     model = get_word2vec_model (sc, app_home)
     get_synonyms (model, mesh_xml, app_home)
 
-    articles = articles.map (lambda a : ( a, mesh_xml ))
+    e_mesh = os.path.join (app_home, "cache", extended_mesh)
+    articles = articles.map (lambda a : ( a, e_mesh ))
 
     logger.info ("intermediate: {0} articles to process".format (articles.count ()))
     articles = articles.flatMap (process_article).cache ().collect ()

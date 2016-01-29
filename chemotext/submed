@@ -4,7 +4,7 @@ source /projects/stars/app/evry/conf/env.sh
 CHEMOTEXT_HOME=/projects/stars/app/episteme/chemotext
 
 articles=$STARS_HOME/var/pubmed/articles/
-mesh=$STARS_HOME/var/pubmed/mesh/desc2016.xml 
+mesh=$STARS_HOME/var/pubmed/mesh/desc2016.xml
 
 echo $CHEMOTEXT_HOME
 $SPARK_HOME/bin/spark-submit   \
